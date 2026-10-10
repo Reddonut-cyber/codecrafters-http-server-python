@@ -1,12 +1,9 @@
-import socket  # noqa: F401
+import socket
+import threading
 
 
-def main():
-    server_socket = socket.create_server(("localhost", 4221), reuse_port=True)
-
-    while True:
-        conn, addr = server_socket.accept()
-
+def handle_client(conn: socket.socket) -> None:
+    try:
         data = conn.recv(1024).decode("utf-8")
 
         if data:
@@ -14,10 +11,10 @@ def main():
             request_line = lines[0]
             parts = request_line.split(" ")
 
-            # Parse headers into a case-insensitive dictionary
+            # Parse headers case-insensitively
             headers = {}
             for line in lines[1:]:
-                if not line:  # Reached the empty line separating headers from body
+                if not line:
                     break
                 if ": " in line:
                     key, val = line.split(": ", 1)
@@ -55,8 +52,18 @@ def main():
 
                 else:
                     conn.sendall(b"HTTP/1.1 404 Not Found\r\n\r\n")
-
+    finally:
         conn.close()
+
+
+def main():
+    server_socket = socket.create_server(("localhost", 4221), reuse_port=True)
+
+    while True:
+        conn, addr = server_socket.accept()
+        # Spawn a new thread for each connection so accept() isn't blocked
+        client_thread = threading.Thread(target=handle_client, args=(conn,))
+        client_thread.start()
 
 
 if __name__ == "__main__":
