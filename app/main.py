@@ -21,6 +21,19 @@ def main():
 
                 if path == "/":
                     conn.sendall(b"HTTP/1.1 200 OK\r\n\r\n")
+                elif path.startswith("/echo/"):
+                    echo_str = path[len("/echo/"):]
+                    body_bytes = echo_str.encode("utf-8")
+                    content_length = len(body_bytes)
+
+                    response = (
+                        f"HTTP/1.1 200 OK\r\n"
+                        f"Content-Type: text/plain\r\n"
+                        f"Content-Length: {content_length}\r\n"
+                        f"\r\n"
+                        f"{echo_str}"
+                    )
+                    conn.sendall(response.encode("utf-8"))
                 else:
                     conn.sendall(b"HTTP/1.1 404 Not Found\r\n\r\n")
 
