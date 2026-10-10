@@ -6,75 +6,104 @@ import threading
 
 def handle_client(conn: socket.socket, directory: str | None) -> None:
     try:
-        data = conn.recv(1024).decode("utf-8")
+        raw_data = conn.recv(4096)
+        if not raw_data:
+            return
 
-        if data:
-            lines = data.split("\r\n")
-            request_line = lines[0]
-            parts = request_line.split(" ")
+        # Separate headers and body using \r\n\r\n
+        delimiter = b"\r\n\r\n"
+        if delimiter not in raw_data:
+            return
 
-            # Parse headers case-insensitively
-            headers = {}
-            for line in lines[1:]:
-                if not line:
-                    break
-                if ": " in line:
-                    key, val = line.split(": ", 1)
-                    headers[key.lower()] = val
+        header_bytes, body_bytes = raw_data.split(delimiter, 1)
+        header_text = header_bytes.decode("utf-8")
+        lines = header_text.split("\r\n")
 
-            if len(parts) >= 2:
-                path = parts[1]
+        request_line = lines[0]
+        parts = request_line.split(" ")
+        if len(parts) < 2:
+            return
 
-                if path == "/":
-                    conn.sendall(b"HTTP/1.1 200 OK\r\n\r\n")
+        method = parts[0]
+        path = parts[1]
 
-                elif path.startswith("/echo/"):
-                    echo_str = path[len("/echo/"):]
-                    body_bytes = echo_str.encode("utf-8")
-                    response = (
+        # Parse headers case-insensitively
+        headers = {}
+        for line in lines[1:]:
+            if ": " in line:
+                key, val = line.split(": ", 1)
+                headers[key.lower()] = val
+
+        # Ensure complete body is read based on Content-Length
+        content_length = int(headers.get("content-length", 0))
+        while len(body_bytes) < content_length:
+            chunk = conn.recv(4096)
+            if not chunk:
+                break
+            body_bytes += chunk
+
+        # Route matching
+        if path == "/":
+            conn.sendall(b"HTTP/1.1 200 OK\r\n\r\n")
+
+        elif path.startswith("/echo/"):
+            echo_str = path[len("/echo/"):]
+            body = echo_str.encode("utf-8")
+            response = (
+                f"HTTP/1.1 200 OK\r\n"
+                f"Content-Type: text/plain\r\n"
+                f"Content-Length: {len(body)}\r\n"
+                f"\r\n"
+                f"{echo_str}"
+            )
+            conn.sendall(response.encode("utf-8"))
+
+        elif path == "/user-agent":
+            user_agent = headers.get("user-agent", "")
+            body = user_agent.encode("utf-8")
+            response = (
+                f"HTTP/1.1 200 OK\r\n"
+                f"Content-Type: text/plain\r\n"
+                f"Content-Length: {len(body)}\r\n"
+                f"\r\n"
+                f"{user_agent}"
+            )
+            conn.sendall(response.encode("utf-8"))
+
+        elif path.startswith("/files/"):
+            filename = path[len("/files/"):]
+            if not directory:
+                conn.sendall(b"HTTP/1.1 404 Not Found\r\n\r\n")
+                return
+
+            filepath = os.path.join(directory, filename)
+
+            if method == "GET":
+                if os.path.isfile(filepath):
+                    with open(filepath, "rb") as f:
+                        file_content = f.read()
+
+                    header = (
                         f"HTTP/1.1 200 OK\r\n"
-                        f"Content-Type: text/plain\r\n"
-                        f"Content-Length: {len(body_bytes)}\r\n"
+                        f"Content-Type: application/octet-stream\r\n"
+                        f"Content-Length: {len(file_content)}\r\n"
                         f"\r\n"
-                        f"{echo_str}"
-                    )
-                    conn.sendall(response.encode("utf-8"))
-
-                elif path == "/user-agent":
-                    user_agent = headers.get("user-agent", "")
-                    body_bytes = user_agent.encode("utf-8")
-                    response = (
-                        f"HTTP/1.1 200 OK\r\n"
-                        f"Content-Type: text/plain\r\n"
-                        f"Content-Length: {len(body_bytes)}\r\n"
-                        f"\r\n"
-                        f"{user_agent}"
-                    )
-                    conn.sendall(response.encode("utf-8"))
-
-                elif path.startswith("/files/"):
-                    filename = path[len("/files/"):]
-                    if directory:
-                        filepath = os.path.join(directory, filename)
-                        if os.path.isfile(filepath):
-                            with open(filepath, "rb") as f:
-                                body = f.read()
-
-                            header = (
-                                f"HTTP/1.1 200 OK\r\n"
-                                f"Content-Type: application/octet-stream\r\n"
-                                f"Content-Length: {len(body)}\r\n"
-                                f"\r\n"
-                            ).encode("utf-8")
-
-                            conn.sendall(header + body)
-                        else:
-                            conn.sendall(b"HTTP/1.1 404 Not Found\r\n\r\n")
-                    else:
-                        conn.sendall(b"HTTP/1.1 404 Not Found\r\n\r\n")
-
+                    ).encode("utf-8")
+                    conn.sendall(header + file_content)
                 else:
                     conn.sendall(b"HTTP/1.1 404 Not Found\r\n\r\n")
+
+            elif method == "POST":
+                with open(filepath, "wb") as f:
+                    f.write(body_bytes)
+                conn.sendall(b"HTTP/1.1 201 Created\r\n\r\n")
+
+            else:
+                conn.sendall(b"HTTP/1.1 405 Method Not Allowed\r\n\r\n")
+
+        else:
+            conn.sendall(b"HTTP/1.1 404 Not Found\r\n\r\n")
+
     finally:
         conn.close()
 
